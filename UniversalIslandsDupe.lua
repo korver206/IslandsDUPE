@@ -116,8 +116,8 @@ local function scanItems()
                 if child:IsA("Tool") or (child:IsA("Model") and child:FindFirstChild("Handle")) then
                     local itemName = child.Name
                     local lowerName = itemName:lower()
-                    -- Skip non-items
-                    if not (lowerName:find("clone") or lowerName:find("temp") or lowerName:find("effect") or lowerName:find("effect") or lowerName:find("part")) then
+                    -- Skip obvious non-items (loosened)
+                    if not (lowerName:find("clone") or lowerName:find("temp") or lowerName:find("effect") or lowerName:find("temp")) then
                         local itemId = nil
                         local isStackable = false
                         local stackValueName = nil
