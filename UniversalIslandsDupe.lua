@@ -94,7 +94,7 @@ local function fireBothRemotes()
     fireRequest()
 end
 
--- Function to scan and load all obtainable items with better icon detection
+-- Function to scan and load all obtainable items with stack detection
 local allItems = {}
 local function scanItems()
     allItems = {}
@@ -103,7 +103,7 @@ local function scanItems()
         table.insert(areas, player.Backpack)
     end
     local scanned = 0
-    local limit = 500  -- Prevent lag
+    local limit = 500
     for _, area in ipairs(areas) do
         pcall(function()
             local descendants = area:GetDescendants()
@@ -113,14 +113,21 @@ local function scanItems()
                 
                 if child:IsA("Tool") or (child:IsA("Model") and child:FindFirstChild("Handle")) then
                     local itemName = child.Name:lower()
-                    -- Skip common non-items
                     if not (itemName:find("clone") or itemName:find("temp") or itemName:find("effect")) then
                         local iconId = ""
                         local itemId = nil
+                        local stackValue = nil
+                        local isStackable = false
                         
-                        -- Enhanced icon detection for Islands
+                        -- Stack detection
+                        local quantityVal = child:FindFirstChild("Quantity") or child:FindFirstChild("Stack") or child:FindFirstChild("Amount")
+                        if quantityVal and (quantityVal:IsA("IntValue") or quantityVal:IsA("NumberValue")) then
+                            isStackable = true
+                            stackValue = quantityVal
+                        end
+                        
+                        -- Icon detection (same as before)
                         if child:IsA("Tool") then
-                            -- IconId StringValue
                             local iconVal = child:FindFirstChild("IconId")
                             if iconVal and iconVal:IsA("StringValue") and iconVal.Value ~= "" then
                                 iconId = "rbxassetid://" .. iconVal.Value
@@ -131,7 +138,6 @@ local function scanItems()
                             end
                         end
                         
-                        -- Handle Decal/Texture
                         if child:FindFirstChild("Handle") then
                             local handle = child.Handle
                             if handle:FindFirstChildOfClass("Decal") then
@@ -144,11 +150,10 @@ local function scanItems()
                             end
                         end
                         
-                        -- Search for dedicated icon assets
                         if iconId == "" then
                             local iconSearch = ReplicatedStorage:FindFirstChild(itemName .. "Icon", true) or
                                              ReplicatedStorage:FindFirstChild(itemName .. "_icon", true) or
-                                             ReplicatedStorage:FindFirstChild("Icons"):FindFirstChild(itemName, true)
+                                             ReplicatedStorage:FindFirstChild("Icons") and ReplicatedStorage.Icons:FindFirstChild(itemName, true)
                             if iconSearch then
                                 if iconSearch:IsA("StringValue") and iconSearch.Value ~= "" then
                                     iconId = "rbxassetid://" .. iconSearch.Value
@@ -158,12 +163,9 @@ local function scanItems()
                             end
                         end
                         
-                        -- Fallback icon
-                        if iconId == "" then
-                            iconId = "rbxassetid://6031097220"  -- Generic item icon
-                        end
+                        if iconId == "" then iconId = "rbxassetid://6031097220" end
                         
-                        -- Try to get item ID from name
+                        -- Item ID from name
                         for name, id in pairs(itemIds) do
                             if itemName:find(name) then
                                 itemId = id
@@ -171,10 +173,9 @@ local function scanItems()
                             end
                         end
                         
-                        -- Avoid duplicates
                         local exists = false
                         for _, item in ipairs(allItems) do
-                            if item.name == itemName then
+                            if item.name == child.Name then
                                 exists = true
                                 break
                             end
@@ -185,7 +186,9 @@ local function scanItems()
                                 obj = child,
                                 icon = iconId,
                                 id = itemId or 0,
-                                lowerName = itemName
+                                lowerName = itemName,
+                                isStackable = isStackable,
+                                stackValueName = stackValue and stackValue.Name or nil
                             })
                         end
                     end
@@ -195,7 +198,7 @@ local function scanItems()
         if scanned > limit then break end
     end
     table.sort(allItems, function(a, b) return a.name < b.name end)
-    print("Scanned " .. #allItems .. " unique items with enhanced icons")
+    print("Scanned " .. #allItems .. " items (" .. #stackables .. " stackable)")
     return #allItems > 0
 end
 
@@ -377,7 +380,7 @@ local function createUI()
             nameLabel.Size = UDim2.new(1, 0, 0.4, 0)
             nameLabel.Position = UDim2.new(0, 0, 0.6, 0)
             nameLabel.BackgroundTransparency = 1
-            nameLabel.Text = itemData.name
+            nameLabel.Text = itemData.name .. (itemData.isStackable and " (Stackable)" or "")
             nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
             nameLabel.TextScaled = true
             nameLabel.Font = Enum.Font.SourceSansBold
@@ -388,7 +391,7 @@ local function createUI()
                 if input.UserInputType == Enum.UserInputType.MouseButton1 then
                     local amt = tonumber(amountInput.Text) or 1
                     local count = dupeItem(itemData, amt)
-                    consoleOutput.Text = consoleOutput.Text .. "\n[SUCCESS] Duped '" .. itemData.name .. "' x" .. amt .. " (Local: " .. count .. ", Server: " .. realAdds .. ")"
+                    consoleOutput.Text = consoleOutput.Text .. "\n[SUCCESS] Duped '" .. itemData.name .. "' x" .. amt .. " (Stacked/Local: " .. count .. ")"
                 end
             end)
             
@@ -417,7 +420,7 @@ local function createUI()
     consoleOutput.BackgroundTransparency = 0.2
     consoleOutput.BorderSizePixel = 1
     consoleOutput.BorderColor3 = Color3.fromRGB(0, 255, 0)
-    consoleOutput.Text = "[CONSOLE] Loaded! Icons in alpha order. Click icons to dupe (tries real server adds for persistence/usability)."
+    consoleOutput.Text = "[CONSOLE] Loaded with stacking! Icons alpha order. Click for dupe (stacks into existing if possible)."
     consoleOutput.TextColor3 = Color3.fromRGB(0, 255, 0)
     consoleOutput.TextSize = 12
     consoleOutput.TextWrapped = true
@@ -426,7 +429,7 @@ local function createUI()
     consoleOutput.TextXAlignment = Enum.TextXAlignment.Left
     consoleOutput.Parent = frame
     
-    -- Override print/warn for console with line management
+    -- Override print/warn
     local oldPrint = print
     local oldWarn = warn
     print = function(...)
@@ -434,9 +437,7 @@ local function createUI()
         if consoleOutput then
             local lines = consoleOutput.Text:split("\n")
             table.insert(lines, "[PRINT] " .. msg)
-            if #lines > 18 then
-                table.remove(lines, 1)
-            end
+            if #lines > 18 then table.remove(lines, 1) end
             consoleOutput.Text = table.concat(lines, "\n")
         end
         oldPrint(...)
@@ -446,9 +447,7 @@ local function createUI()
         if consoleOutput then
             local lines = consoleOutput.Text:split("\n")
             table.insert(lines, "[WARN] " .. msg)
-            if #lines > 18 then
-                table.remove(lines, 1)
-            end
+            if #lines > 18 then table.remove(lines, 1) end
             consoleOutput.Text = table.concat(lines, "\n")
         end
         oldWarn(...)
@@ -457,7 +456,7 @@ end
 
 -- Toggle UI
 UserInputService.InputBegan:Connect(function(input)
-    if input.KeyCode == Enum.KeyCode.D then
+    if input.KeyCode == Enum.KeyCode.G then
         enabled = not enabled
         if frame then
             frame.Visible = enabled
@@ -476,4 +475,4 @@ end)
 -- Initialize
 scanInventoryRemotes()
 createUI()
-print("Universal Islands Dupe with Icons loaded! Press 'D' to toggle. Icons alpha sorted; click for dupe (real server + persistence attempts).")
+print("Universal Islands Dupe with Stacking & Icons loaded! Press 'G' to toggle. Click icons to dupe/stack (alpha order, real server attempts).")
