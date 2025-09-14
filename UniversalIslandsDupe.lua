@@ -149,7 +149,7 @@ local function createUI()
     gui.Parent = player:WaitForChild("PlayerGui")
     
     frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 500, 0, 500)
+    frame.Size = UDim2.new(0, 500, 0, 520)
     frame.Position = UDim2.new(0, 10, 0, 10)
     frame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
     frame.BackgroundTransparency = 0.2
@@ -309,10 +309,41 @@ local function createUI()
         end)
     end)
 
+    -- Quick Add button
+    local quickBtn = Instance.new("TextButton")
+    quickBtn.Size = UDim2.new(0.45, 0, 0, 25)
+    quickBtn.Position = UDim2.new(0.025, 0, 0, 400)
+    quickBtn.Text = "Quick Add Item (ID:1, Amount:100)"
+    quickBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    quickBtn.BackgroundColor3 = Color3.fromRGB(150, 100, 200)
+    quickBtn.BorderSizePixel = 0
+    quickBtn.Font = Enum.Font.SourceSansBold
+    quickBtn.TextScaled = true
+    quickBtn.Parent = frame
+    quickBtn.MouseButton1Click:Connect(function()
+        if not selectedRemote then
+            if consoleOutput then consoleOutput.Text = "No remote selected" end
+            return
+        end
+        pcall(function()
+            if selectedRemote:IsA("RemoteEvent") then
+                selectedRemote:FireServer(1, 100)
+            else
+                local result = selectedRemote:InvokeServer(1, 100)
+                if consoleOutput then
+                    consoleOutput.Text = "Invoked " .. selectedName .. ", result: " .. tostring(result)
+                end
+            end
+            if consoleOutput then
+                consoleOutput.Text = "Quick added item ID:1, amount:100"
+            end
+        end)
+    end)
+
     -- Fixed dupe
     local fixedBtn = Instance.new("TextButton")
     fixedBtn.Size = UDim2.new(0.95, 0, 0, 25)
-    fixedBtn.Position = UDim2.new(0.025, 0, 0, 400)
+    fixedBtn.Position = UDim2.new(0.025, 0, 0, 430)
     fixedBtn.Text = "Fixed Dupe (3 Items)"
     fixedBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     fixedBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
@@ -379,11 +410,11 @@ local function createUI()
     -- Console
     consoleOutput = Instance.new("TextLabel")
     consoleOutput.Size = UDim2.new(0.95, 0, 0, 45)
-    consoleOutput.Position = UDim2.new(0.025, 0, 0, 430)
+    consoleOutput.Position = UDim2.new(0.025, 0, 0, 460)
     consoleOutput.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
     consoleOutput.BorderSizePixel = 1
     consoleOutput.BorderColor3 = Color3.fromRGB(0, 255, 0)
-    consoleOutput.Text = "[CONSOLE] Select inventory remote [INVENTORY], params auto-filled. Click Fire to add items."
+    consoleOutput.Text = "[CONSOLE] Select remote, use Quick Add for auto params or Fire for custom."
     consoleOutput.TextColor3 = Color3.fromRGB(0, 255, 0)
     consoleOutput.TextSize = 11
     consoleOutput.TextWrapped = true
