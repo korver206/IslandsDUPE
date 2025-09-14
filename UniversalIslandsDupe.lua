@@ -116,7 +116,7 @@ local function scanItems()
                 if child:IsA("Tool") or (child:IsA("Model") and child:FindFirstChild("Handle")) then
                     local itemName = child.Name
                     local lowerName = itemName:lower()
-                    -- Load all, no skip
+                    -- Load all Tools/Models with Handle, no skips
                         local itemId = nil
                         local isStackable = false
                         local stackValueName = nil
