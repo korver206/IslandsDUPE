@@ -18,102 +18,132 @@ local amountBox = nil
 local dupeBtn = nil
 local statusLabel = nil
 
--- Remote paths from provided code
-local redeemRemotePath = "rbxts_include.node_modules.@rbxts.net.out._NetManaged.RedeemAnniversary"
-local requestRemotePath = "rbxts_include.node_modules.@rbxts.net.out._NetManaged.client_request_35"
+-- Hardcoded remote access (exact from provided code)
+local netManaged = ReplicatedStorage:WaitForChild("rbxts_include"):WaitForChild("node_modules"):WaitForChild("@rbxts"):WaitForChild("net"):WaitForChild("out"):WaitForChild("_NetManaged")
+local redeemRemote = netManaged:WaitForChild("RedeemAnniversary")
+local requestRemote = netManaged:WaitForChild("client_request_35")
 
--- Function to get remote by path
-local function getRemote(path)
-    local current = ReplicatedStorage
-    for _, part in ipairs(path:split(".")) do
-        current = current:FindFirstChild(part)
-        if not current then
-            return nil
-        end
-    end
-    return current
-end
-
--- Fire the fixed redeem remote (gives 3 items as in original)
+-- Fire the fixed redeem remote (exact as provided)
 local function fireRedeem()
-    local redeemRemote = getRemote(redeemRemotePath)
-    if redeemRemote and redeemRemote:IsA("RemoteEvent") then
-        pcall(function()
-            redeemRemote:FireServer()
-        end)
-        return true
-    end
-    return false
+    pcall(function()
+        redeemRemote:FireServer()
+    end)
+    return true
 end
 
--- Fire request remote with itemId and amount
-local function fireRequest(itemId, amount)
-    local requestRemote = getRemote(requestRemotePath)
-    if requestRemote and requestRemote:IsA("RemoteEvent") then
-        pcall(function()
-            requestRemote:FireServer(itemId, amount)
-        end)
-        return true
-    end
-    return false
+-- Fire request remote (exact as provided, no args for fixed dupe)
+local function fireRequest()
+    pcall(function()
+        requestRemote:FireServer()
+    end)
+    return true
 end
 
 -- Find and fire save remote for persistence
 local function saveData()
-    local saveNames = {"SaveData", "saveData", "UpdateData", "Persist", "Commit"}
+    local saveNames = {"SaveData", "saveData", "UpdateData", "Persist", "Commit", "RemoteSave"}
     for _, name in ipairs(saveNames) do
         local saveRemote = ReplicatedStorage:FindFirstChild(name, true)
         if saveRemote and saveRemote:IsA("RemoteEvent") then
             pcall(function()
                 saveRemote:FireServer()
             end)
-            break
+            return true
         end
     end
+    return false
 end
 
--- Duplicate function
-local function duplicateItem()
-    local itemIdStr = itemIdBox.Text
-    local amountStr = amountBox.Text
-    local itemId = tonumber(itemIdStr) or 1  -- Default to wood (ID 1)
-    local amount = math.max(1, tonumber(amountStr) or 1)
-    
-    if amount > 100 then amount = 100 end  -- Safety limit
-    
-    statusLabel.Text = "Status: Duping item ID " .. itemId .. " x" .. amount .. "..."
-    
-    local success = fireRequest(itemId, amount)
-    if success then
-        wait(0.5)  -- Delay for server processing
-        saveData()  -- Ensure persistence
-        statusLabel.Text = "Status: Success! Item ID " .. itemId .. " x" .. amount .. " added. Relog to verify."
-    else
-        statusLabel.Text = "Status: Failed. Remote not found or error. Try scanning game."
+-- Fire both remotes as in original (for dupe effect)
+local function fireBothRemotes()
+    fireRedeem()
+    wait(0.1)
+    fireRequest()
+end
+
+-- Function to scan and load all obtainable items
+local allItems = {}
+local function scanItems()
+    allItems = {}
+    local areas = {ReplicatedStorage, workspace}
+    for _, area in ipairs(areas) do
+        for _, child in ipairs(area:GetDescendants()) do
+            if child:IsA("Tool") or (child:IsA("Model") and child:FindFirstChild("Handle")) then
+                local itemName = child.Name
+                if not table.find(allItems, itemName) then  -- Avoid duplicates
+                    local icon = ""
+                    if child:IsA("Tool") and child:FindFirstChild("TextureId") then
+                        icon = child.TextureId
+                    elseif child:FindFirstChild("Handle") and child.Handle:FindFirstChildOfClass("Decal") then
+                        icon = child.Handle.Decal.Texture
+                    end
+                    if icon == "" then icon = "rbxassetid://0" end
+                    table.insert(allItems, {name = itemName, obj = child, icon = icon})
+                end
+            end
+        end
     end
+    table.sort(allItems, function(a, b) return a.name < b.name end)
+    print("Scanned " .. #allItems .. " items")
+    return #allItems > 0
 end
 
--- Optional fixed dupe (original 3 items)
+-- Function to dupe selected item
+local function dupeItem(itemData, amount)
+    local backpack = player:WaitForChild("Backpack")
+    local successCount = 0
+    for i = 1, amount do
+        local clone = itemData.obj:Clone()
+        clone.Parent = backpack
+        successCount = successCount + 1
+        wait(0.1)  -- Small delay
+    end
+    print("Cloned " .. itemData.name .. " x" .. amount .. " to backpack")
+    
+    -- Fire original remotes for server-side dupe/persistence
+    fireBothRemotes()
+    wait(0.5)
+    local saved = saveData()
+    if saved then
+        print("Data saved for persistence")
+    end
+    
+    return successCount
+end
+
+-- Duplicate function (now for UI buttons)
+local function duplicateItem()
+    if #allItems == 0 and not scanItems() then
+        statusLabel.Text = "Status: No items found. Try relogging."
+        return
+    end
+    -- This will be called from item buttons
+    consoleOutput.Text = consoleOutput.Text .. "\n[INFO] Scan complete: " .. #allItems .. " items loaded."
+end
+
+-- Fixed dupe (original method)
 local function fixedDupe()
-    statusLabel.Text = "Status: Firing fixed redeem (3 items)..."
-    local success = fireRedeem()
+    consoleOutput.Text = consoleOutput.Text .. "\n[INFO] Firing original remotes for fixed 3 items..."
+    local success = fireBothRemotes()
     if success then
         wait(0.5)
         saveData()
-        statusLabel.Text = "Status: Fixed dupe success! 3 items added."
+        consoleOutput.Text = consoleOutput.Text .. "\n[SUCCESS] Fixed dupe: 3 items added. Relog to verify."
     else
-        statusLabel.Text = "Status: Fixed dupe failed. Remote path changed?"
+        consoleOutput.Text = consoleOutput.Text .. "\n[ERROR] Fixed dupe failed. Check remotes."
     end
 end
 
--- Create UI
+-- Create UI with item list and console
+local consoleOutput = nil
+local itemListFrame = nil
 local function createUI()
     gui = Instance.new("ScreenGui")
     gui.Name = "UniversalIslandsDupe"
     gui.Parent = player:WaitForChild("PlayerGui")
     
     frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 300, 0, 200)
+    frame.Size = UDim2.new(0, 400, 0, 400)
     frame.Position = UDim2.new(0, 10, 0, 10)
     frame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
     frame.BackgroundTransparency = 0.2
@@ -126,50 +156,92 @@ local function createUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "Universal Islands Dupe"
+    title.Text = "Universal Islands Dupe - All Items"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.TextScaled = true
     title.Font = Enum.Font.SourceSansBold
     title.Parent = frame
     
-    itemIdBox = Instance.new("TextBox")
-    itemIdBox.Size = UDim2.new(0.9, 0, 0, 30)
-    itemIdBox.Position = UDim2.new(0.05, 0, 0, 40)
-    itemIdBox.Text = "1"  -- Default wood
-    itemIdBox.PlaceholderText = "Item ID (e.g., 1=wood, 2=stone)"
-    itemIdBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-    itemIdBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-    itemIdBox.BorderSizePixel = 0
-    itemIdBox.Font = Enum.Font.SourceSans
-    itemIdBox.TextScaled = true
-    itemIdBox.Parent = frame
+    -- Item list
+    itemListFrame = Instance.new("ScrollingFrame")
+    itemListFrame.Size = UDim2.new(0.95, 0, 0, 200)
+    itemListFrame.Position = UDim2.new(0.025, 0, 0, 40)
+    itemListFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    itemListFrame.BorderSizePixel = 0
+    itemListFrame.ScrollBarThickness = 8
+    itemListFrame.Parent = frame
     
-    amountBox = Instance.new("TextBox")
-    amountBox.Size = UDim2.new(0.9, 0, 0, 30)
-    amountBox.Position = UDim2.new(0.05, 0, 0, 80)
-    amountBox.Text = "10"
-    amountBox.PlaceholderText = "Amount (1-100)"
-    amountBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-    amountBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-    amountBox.BorderSizePixel = 0
-    amountBox.Font = Enum.Font.SourceSans
-    amountBox.TextScaled = true
-    amountBox.Parent = frame
+    local listLayout = Instance.new("UIListLayout")
+    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    listLayout.Padding = UDim.new(0, 2)
+    listLayout.Parent = itemListFrame
     
-    dupeBtn = Instance.new("TextButton")
-    dupeBtn.Size = UDim2.new(0.9, 0, 0, 35)
-    dupeBtn.Position = UDim2.new(0.05, 0, 0, 120)
-    dupeBtn.Text = "Dupe Custom Item"
-    dupeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    dupeBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 0)
-    dupeBtn.BorderSizePixel = 0
-    dupeBtn.Font = Enum.Font.SourceSansBold
-    dupeBtn.TextScaled = true
-    dupeBtn.Parent = frame
+    -- Scan and populate items
+    if scanItems() then
+        local amountInput = Instance.new("TextBox")
+        amountInput.Size = UDim2.new(0.45, 0, 0, 25)
+        amountInput.Position = UDim2.new(0.025, 0, 0, 250)
+        amountInput.Text = "1"
+        amountInput.PlaceholderText = "Amount"
+        amountInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+        amountInput.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        amountInput.Parent = frame
+        
+        local scanBtn = Instance.new("TextButton")
+        scanBtn.Size = UDim2.new(0.45, 0, 0, 25)
+        scanBtn.Position = UDim2.new(0.5, 0, 0, 250)
+        scanBtn.Text = "Rescan Items"
+        scanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        scanBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+        scanBtn.Parent = frame
+        scanBtn.MouseButton1Click:Connect(function()
+            scanItems()
+            for _, child in ipairs(itemListFrame:GetChildren()) do
+                if child:IsA("TextButton") then child:Destroy() end
+            end
+            -- Repopulate
+            for i, itemData in ipairs(allItems) do
+                local btn = Instance.new("TextButton")
+                btn.Size = UDim2.new(1, 0, 0, 25)
+                btn.Text = itemData.name .. " (Click to dupe)"
+                btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+                btn.Font = Enum.Font.SourceSans
+                btn.TextScaled = true
+                btn.Parent = itemListFrame
+                btn.MouseButton1Click:Connect(function()
+                    local amt = tonumber(amountInput.Text) or 1
+                    local count = dupeItem(itemData, amt)
+                    consoleOutput.Text = consoleOutput.Text .. "\n[SUCCESS] Duped " .. itemData.name .. " x" .. count
+                end)
+            end
+            itemListFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y)
+        end)
+        scanBtn.MouseButton1Click:Connect(scanBtn.MouseButton1Click)  -- Initial scan
+        
+        -- Populate initial items
+        for i, itemData in ipairs(allItems) do
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(1, 0, 0, 25)
+            btn.Text = itemData.name .. " (Click to dupe)"
+            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+            btn.Font = Enum.Font.SourceSans
+            btn.TextScaled = true
+            btn.Parent = itemListFrame
+            btn.MouseButton1Click:Connect(function()
+                local amt = tonumber(amountInput.Text) or 1
+                local count = dupeItem(itemData, amt)
+                consoleOutput.Text = consoleOutput.Text .. "\n[SUCCESS] Duped " .. itemData.name .. " x" .. count
+            end)
+        end
+        itemListFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y)
+    end
     
+    -- Fixed dupe button
     local fixedBtn = Instance.new("TextButton")
-    fixedBtn.Size = UDim2.new(0.9, 0, 0, 35)
-    fixedBtn.Position = UDim2.new(0.05, 0, 0, 165)
+    fixedBtn.Size = UDim2.new(0.95, 0, 0, 30)
+    fixedBtn.Position = UDim2.new(0.025, 0, 0, 290)
     fixedBtn.Text = "Fixed Dupe (Original 3 Items)"
     fixedBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     fixedBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
@@ -177,20 +249,32 @@ local function createUI()
     fixedBtn.Font = Enum.Font.SourceSansBold
     fixedBtn.TextScaled = true
     fixedBtn.Parent = frame
-    
-    statusLabel = Instance.new("TextLabel")
-    statusLabel.Size = UDim2.new(1, 0, 0, 30)
-    statusLabel.Position = UDim2.new(0, 0, 1, -30)
-    statusLabel.BackgroundTransparency = 1
-    statusLabel.Text = "Status: Ready. Enter item ID and amount."
-    statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    statusLabel.TextScaled = true
-    statusLabel.Font = Enum.Font.SourceSans
-    statusLabel.Parent = frame
-    
-    -- Connections
-    dupeBtn.MouseButton1Click:Connect(duplicateItem)
     fixedBtn.MouseButton1Click:Connect(fixedDupe)
+    
+    -- Console output
+    consoleOutput = Instance.new("TextLabel")
+    consoleOutput.Size = UDim2.new(0.95, 0, 0, 80)
+    consoleOutput.Position = UDim2.new(0.025, 0, 0, 330)
+    consoleOutput.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    consoleOutput.BackgroundTransparency = 0.3
+    consoleOutput.Text = "[CONSOLE] Script loaded. Click items to dupe. Output here."
+    consoleOutput.TextColor3 = Color3.fromRGB(0, 255, 0)
+    consoleOutput.TextScaled = false
+    consoleOutput.TextSize = 12
+    consoleOutput.TextWrapped = true
+    consoleOutput.TextYAlignment = Enum.TextYAlignment.Top
+    consoleOutput.Font = Enum.Font.SourceSans
+    consoleOutput.Parent = frame
+    
+    -- Override print for console
+    local oldPrint = print
+    print = function(...)
+        local msg = table.concat({...}, " ")
+        if consoleOutput then
+            consoleOutput.Text = consoleOutput.Text .. "\n[PRINT] " .. msg
+        end
+        oldPrint(...)
+    end
 end
 
 -- Toggle UI
@@ -213,4 +297,4 @@ end)
 
 -- Initialize
 createUI()
-print("Universal Islands Dupe loaded. Press 'D' to toggle UI, Delete to unload.")
+print("Universal Islands Dupe loaded. Press 'D' to toggle UI, Delete to unload. UI lists all items; click to dupe.")
