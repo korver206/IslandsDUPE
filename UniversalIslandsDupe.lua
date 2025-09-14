@@ -18,6 +18,7 @@ local frame = nil
 
 -- Hardcoded remote access (improved with fallback search)
 local allRemotes = {}
+local inventoryNames = {"AddItem", "GiveItem", "InventoryAdd", "AddToInventory", "GiveTool", "EquipItem", "ReceiveItem", "ItemAdd", "UpdateInventory", "Award", "ProcessItem", "GrantItem", "AddToBackpack", "GiveAward"}
 local netManaged = ReplicatedStorage:FindFirstChild("rbxts_include", true)
 if netManaged then
     netManaged = netManaged:FindFirstChild("node_modules", true)
@@ -37,10 +38,18 @@ end
 if netManaged then
     for _, child in ipairs(netManaged:GetDescendants()) do
         if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+            local isInventory = false
+            for _, name in ipairs(inventoryNames) do
+                if string.find(child.Name:lower(), name:lower()) then
+                    isInventory = true
+                    break
+                end
+            end
             table.insert(allRemotes, {
                 name = child.Name,
                 obj = child,
-                isEvent = child:IsA("RemoteEvent")
+                isEvent = child:IsA("RemoteEvent"),
+                isInventory = isInventory
             })
         end
     end
@@ -153,7 +162,7 @@ local function createUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 25)
     title.BackgroundTransparency = 1
-    title.Text = "Universal Islands Remote Scanner"
+    title.Text = "Universal Islands Item Adder"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.TextScaled = true
     title.Font = Enum.Font.SourceSansBold
@@ -233,10 +242,18 @@ local function createUI()
         if netManaged then
             for _, child in ipairs(netManaged:GetDescendants()) do
                 if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+                    local isInventory = false
+                    for _, name in ipairs(inventoryNames) do
+                        if string.find(child.Name:lower(), name:lower()) then
+                            isInventory = true
+                            break
+                        end
+                    end
                     table.insert(allRemotes, {
                         name = child.Name,
                         obj = child,
-                        isEvent = child:IsA("RemoteEvent")
+                        isEvent = child:IsA("RemoteEvent"),
+                        isInventory = isInventory
                     })
                 end
             end
@@ -314,9 +331,9 @@ local function createUI()
         for i, remoteData in ipairs(allRemotes) do
             local btn = Instance.new("TextButton")
             btn.Size = UDim2.new(1, 0, 0, 25)
-            btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+            btn.BackgroundColor3 = remoteData.isInventory and Color3.fromRGB(100, 150, 100) or Color3.fromRGB(60, 60, 60)
             btn.BorderSizePixel = 0
-            btn.Text = remoteData.name .. (remoteData.isEvent and " (Event)" or " (Function)")
+            btn.Text = remoteData.name .. (remoteData.isEvent and " (Event)" or " (Function)") .. (remoteData.isInventory and " [INVENTORY]" or "")
             btn.TextColor3 = Color3.fromRGB(255, 255, 255)
             btn.Font = Enum.Font.SourceSans
             btn.TextScaled = true
@@ -328,6 +345,16 @@ local function createUI()
                 selectedName = remoteData.name
                 if consoleOutput then
                     consoleOutput.Text = "Selected: " .. selectedName
+                end
+                -- Pre-fill params if inventory
+                if remoteData.isInventory then
+                    param1Input.Text = "1"  -- itemId
+                    param2Input.Text = "100"  -- amount
+                    param3Input.Text = ""
+                    param4Input.Text = ""
+                    if consoleOutput then
+                        consoleOutput.Text = consoleOutput.Text .. "\n[INFO] Pre-filled params: itemId=1, amount=100"
+                    end
                 end
             end)
         end
@@ -356,7 +383,7 @@ local function createUI()
     consoleOutput.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
     consoleOutput.BorderSizePixel = 1
     consoleOutput.BorderColor3 = Color3.fromRGB(0, 255, 0)
-    consoleOutput.Text = "[CONSOLE] Select a remote, enter parameters, click Fire. Use Fixed Dupe for original."
+    consoleOutput.Text = "[CONSOLE] Select inventory remote [INVENTORY], params auto-filled. Click Fire to add items."
     consoleOutput.TextColor3 = Color3.fromRGB(0, 255, 0)
     consoleOutput.TextSize = 11
     consoleOutput.TextWrapped = true
@@ -398,4 +425,4 @@ end)
 
 -- Initialize
 createUI()
-print("Universal Islands Remote Scanner loaded! Press 'D' to toggle UI.")
+print("Universal Islands Item Adder loaded! Press 'D' to toggle UI.")
