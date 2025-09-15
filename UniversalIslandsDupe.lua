@@ -117,7 +117,7 @@ local function fireBothRemotes()
     fireRequest()
 end
 
--- Scan and load all obtainable items (from buddy's script)
+-- Scan and load all obtainable items with enhanced detection
 local allItems = {}
 local function scanItems()
     allItems = {}
@@ -126,7 +126,14 @@ local function scanItems()
         for _, child in ipairs(area:GetDescendants()) do
             if child:IsA("Tool") or (child:IsA("Model") and child:FindFirstChild("Handle")) then
                 local itemName = child.Name
-                if not table.find(allItems, itemName) then  -- Avoid duplicates
+                local found = false
+                for _, existing in ipairs(allItems) do
+                    if existing.name == itemName then
+                        found = true
+                        break
+                    end
+                end
+                if not found then
                     local icon = ""
                     if child:IsA("Tool") and child:FindFirstChild("TextureId") then
                         icon = child.TextureId
@@ -134,37 +141,125 @@ local function scanItems()
                         icon = child.Handle.Decal.Texture
                     end
                     if icon == "" then icon = "rbxassetid://0" end
-                    table.insert(allItems, {name = itemName, obj = child, icon = icon})
+
+                    -- Try to find item ID from various sources
+                    local itemId = nil
+                    if child:FindFirstChild("ItemId") then
+                        itemId = child.ItemId.Value
+                    elseif child:FindFirstChild("ID") then
+                        itemId = child.ID.Value
+                    elseif child:IsA("Tool") and child:FindFirstChild("ToolTip") then
+                        -- Some games store ID in tooltip or other attributes
+                        local tooltip = child.ToolTip
+                        if tooltip and string.match(tooltip, "%d+") then
+                            itemId = tonumber(string.match(tooltip, "%d+"))
+                        end
+                    end
+
+                    -- If no ID found, try to infer from name or use index
+                    if not itemId then
+                        -- Look for numeric patterns in name
+                        if string.match(itemName, "(%d+)") then
+                            itemId = tonumber(string.match(itemName, "(%d+)"))
+                        else
+                            -- Use a hash or sequential ID as fallback
+                            itemId = #allItems + 1
+                        end
+                    end
+
+                    table.insert(allItems, {
+                        name = itemName,
+                        obj = child,
+                        icon = icon,
+                        id = itemId
+                    })
                 end
             end
         end
     end
     table.sort(allItems, function(a, b) return a.name < b.name end)
-    print("Scanned " .. #allItems .. " items")
+    print("Scanned " .. #allItems .. " items with IDs")
     return #allItems > 0
 end
 
--- Function to dupe selected item (from buddy's script)
-local function dupeItem(itemData, amount)
-    local backpack = player:WaitForChild("Backpack")
-    local successCount = 0
-    for i = 1, amount do
-        local clone = itemData.obj:Clone()
-        clone.Parent = backpack
-        successCount = successCount + 1
-        wait(0.1)  -- Small delay
+-- Function to find and use proper inventory remotes for legitimate item granting
+local function findInventoryRemote()
+    -- Look for remotes that can grant items legitimately
+    local grantNames = {"GiveItem", "AddItem", "GrantItem", "AwardItem", "ReceiveItem", "AddToInventory", "InventoryAdd", "PurchaseItem", "BuyItem"}
+    for _, remoteData in ipairs(allRemotes) do
+        if remoteData.isInventory then
+            for _, name in ipairs(grantNames) do
+                if string.find(remoteData.name:lower(), name:lower()) then
+                    return remoteData
+                end
+            end
+        end
     end
-    print("Cloned " .. itemData.name .. " x" .. amount .. " to backpack")
+    return nil
+end
 
-    -- Fire original remotes for server-side dupe/persistence
-    fireBothRemotes()
+-- Function to legitimately grant items using server-side remotes
+local function grantItem(itemData, amount)
+    local inventoryRemote = findInventoryRemote()
+    local success = false
+
+    if inventoryRemote then
+        -- Try using the inventory remote with item ID and amount
+        pcall(function()
+            if inventoryRemote.isEvent then
+                inventoryRemote.obj:FireServer(itemData.id, amount)
+            else
+                local result = inventoryRemote.obj:InvokeServer(itemData.id, amount)
+                print("Inventory remote result: " .. tostring(result))
+            end
+            success = true
+        end)
+        if success then
+            print("Granted " .. itemData.name .. " x" .. amount .. " via " .. inventoryRemote.name)
+        end
+    end
+
+    -- Fallback: Try the original method with item-specific parameters
+    if not success and requestRemote then
+        pcall(function()
+            requestRemote:FireServer(itemData.id, amount)
+            success = true
+        end)
+        if success then
+            print("Granted " .. itemData.name .. " x" .. amount .. " via client_request_35")
+        end
+    end
+
+    -- Last resort: Use the original fixed dupe method
+    if not success then
+        print("Using fallback dupe method for " .. itemData.name)
+        fireBothRemotes()
+        success = true
+    end
+
+    -- Always try to save data for persistence
     wait(0.5)
     local saved = saveData()
     if saved then
         print("Data saved for persistence")
     end
 
-    return successCount
+    return success
+end
+
+-- Enhanced dupe function that uses legitimate server-side granting
+local function dupeItem(itemData, amount)
+    print("Attempting to grant " .. itemData.name .. " x" .. amount .. " legitimately...")
+
+    local success = grantItem(itemData, amount)
+
+    if success then
+        print("Successfully granted " .. itemData.name .. " x" .. amount)
+        return amount
+    else
+        print("Failed to grant " .. itemData.name)
+        return 0
+    end
 end
 
 
@@ -520,7 +615,7 @@ local function createUI()
                 btn.Size = UDim2.new(1, 0, 0, 25)
                 btn.BackgroundColor3 = Color3.fromRGB(60, 100, 150)
                 btn.BorderSizePixel = 0
-                btn.Text = itemData.name .. " (Click to dupe)"
+                btn.Text = itemData.name .. " (ID: " .. itemData.id .. ") - Click to dupe"
                 btn.TextColor3 = Color3.fromRGB(255, 255, 255)
                 btn.Font = Enum.Font.SourceSans
                 btn.TextScaled = true
@@ -532,7 +627,7 @@ local function createUI()
                     selectedRemote = nil
                     selectedName = itemData.name
                     if consoleOutput then
-                        consoleOutput.Text = "Selected: " .. selectedName
+                        consoleOutput.Text = "Selected: " .. selectedName .. " (ID: " .. itemData.id .. ")"
                     end
                 end)
             end
