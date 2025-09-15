@@ -18,9 +18,26 @@ local frame = nil
 local currentMode = "remotes"  -- "remotes" or "items"
 local amountInput = nil
 
--- Hardcoded remote access (improved with fallback search)
+-- Enhanced remote discovery with island selector detection
 local allRemotes = {}
-local inventoryNames = {"AddItem", "GiveItem", "InventoryAdd", "AddToInventory", "GiveTool", "EquipItem", "ReceiveItem", "ItemAdd", "UpdateInventory", "Award", "ProcessItem", "GrantItem", "AddToBackpack", "GiveAward"}
+local inventoryNames = {"AddItem", "GiveItem", "InventoryAdd", "AddToInventory", "GiveTool", "EquipItem", "ReceiveItem", "ItemAdd", "UpdateInventory", "Award", "ProcessItem", "GrantItem", "AddToBackpack", "GiveAward", "Purchase", "Buy", "SpawnItem", "CreateItem"}
+local islandNames = {"Island", "SelectIsland", "IslandSelector", "ChooseIsland", "SetIsland", "IslandSelect"}
+
+-- Find island selector if it exists
+local islandSelector = nil
+local function findIslandSelector()
+    local selectorNames = {"IslandSelector", "SelectIsland", "IslandChooser", "IslandSelect"}
+    for _, name in ipairs(selectorNames) do
+        local selector = ReplicatedStorage:FindFirstChild(name, true)
+        if selector and (selector:IsA("RemoteEvent") or selector:IsA("RemoteFunction")) then
+            islandSelector = selector
+            print("Found island selector: " .. selector.Name)
+            return selector
+        end
+    end
+    return nil
+end
+
 local netManaged = ReplicatedStorage:FindFirstChild("rbxts_include", true)
 if netManaged then
     netManaged = netManaged:FindFirstChild("node_modules", true)
@@ -37,13 +54,21 @@ if netManaged then
         end
     end
 end
+
 if netManaged then
     for _, child in ipairs(netManaged:GetDescendants()) do
         if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
             local isInventory = false
+            local isIsland = false
             for _, name in ipairs(inventoryNames) do
                 if string.find(child.Name:lower(), name:lower()) then
                     isInventory = true
+                    break
+                end
+            end
+            for _, name in ipairs(islandNames) do
+                if string.find(child.Name:lower(), name:lower()) then
+                    isIsland = true
                     break
                 end
             end
@@ -51,7 +76,8 @@ if netManaged then
                 name = child.Name,
                 obj = child,
                 isEvent = child:IsA("RemoteEvent"),
-                isInventory = isInventory
+                isInventory = isInventory,
+                isIsland = isIsland
             })
         end
     end
@@ -62,6 +88,10 @@ else
     redeemRemote = ReplicatedStorage:FindFirstChild("RedeemAnniversary", true)
     requestRemote = ReplicatedStorage:FindFirstChild("client_request_35", true)
 end
+
+-- Find island selector
+findIslandSelector()
+
 table.sort(allRemotes, function(a, b) return a.name < b.name end)
 print("Found " .. #allRemotes .. " remotes in _NetManaged")
 if not redeemRemote then
@@ -198,35 +228,78 @@ local function findInventoryRemote()
     return nil
 end
 
+-- Function to try different parameter combinations for item granting
+local function tryGrantItem(remote, itemId, amount)
+    local success = false
+    local result = nil
+
+    -- Try different parameter combinations
+    local paramCombos = {
+        {itemId, amount},           -- Standard: ID, Amount
+        {itemId, amount, player},   -- With player reference
+        {amount, itemId},           -- Reversed: Amount, ID
+        {itemId},                   -- Just ID
+        {amount},                   -- Just amount
+        {itemId, amount, "grant"},  -- With action string
+        {"grant", itemId, amount}, -- Action first
+    }
+
+    for i, params in ipairs(paramCombos) do
+        pcall(function()
+            if remote:IsA("RemoteEvent") then
+                remote:FireServer(unpack(params))
+                success = true
+                print("Fired " .. remote.Name .. " with params: " .. table.concat(params, ", "))
+            else
+                result = remote:InvokeServer(unpack(params))
+                success = true
+                print("Invoked " .. remote.Name .. " with params: " .. table.concat(params, ", ") .. " | Result: " .. tostring(result))
+            end
+        end)
+        if success then break end
+        wait(0.1)
+    end
+
+    return success, result
+end
+
 -- Function to legitimately grant items using server-side remotes
 local function grantItem(itemData, amount)
-    local inventoryRemote = findInventoryRemote()
     local success = false
 
-    if inventoryRemote then
-        -- Try using the inventory remote with item ID and amount
+    -- First, try to select island if selector exists
+    if islandSelector then
         pcall(function()
-            if inventoryRemote.isEvent then
-                inventoryRemote.obj:FireServer(itemData.id, amount)
+            if islandSelector:IsA("RemoteEvent") then
+                islandSelector:FireServer()
             else
-                local result = inventoryRemote.obj:InvokeServer(itemData.id, amount)
-                print("Inventory remote result: " .. tostring(result))
+                islandSelector:InvokeServer()
             end
-            success = true
+            print("Selected island for dupe")
         end)
-        if success then
-            print("Granted " .. itemData.name .. " x" .. amount .. " via " .. inventoryRemote.name)
+        wait(0.2)
+    end
+
+    -- Try all inventory remotes with different parameter combinations
+    for _, remoteData in ipairs(allRemotes) do
+        if remoteData.isInventory then
+            print("Trying inventory remote: " .. remoteData.name)
+            local remoteSuccess, result = tryGrantItem(remoteData.obj, itemData.id, amount)
+            if remoteSuccess then
+                print("Successfully granted " .. itemData.name .. " x" .. amount .. " via " .. remoteData.name)
+                success = true
+                break
+            end
         end
     end
 
-    -- Fallback: Try the original method with item-specific parameters
+    -- Fallback: Try client_request_35 with different parameters
     if not success and requestRemote then
-        pcall(function()
-            requestRemote:FireServer(itemData.id, amount)
-            success = true
-        end)
-        if success then
+        print("Trying client_request_35 with item parameters")
+        local remoteSuccess, result = tryGrantItem(requestRemote, itemData.id, amount)
+        if remoteSuccess then
             print("Granted " .. itemData.name .. " x" .. amount .. " via client_request_35")
+            success = true
         end
     end
 
@@ -330,6 +403,11 @@ local function createUI()
         if currentMode == "items" and #allItems == 0 then
             scanItems()
         end
+        -- Show/hide parameter inputs based on mode
+        param1Input.Visible = (currentMode == "remotes")
+        param2Input.Visible = (currentMode == "remotes")
+        param3Input.Visible = (currentMode == "remotes")
+        param4Input.Visible = (currentMode == "remotes")
         populateList()
         if consoleOutput then
             consoleOutput.Text = "Switched to " .. currentMode .. " mode"
@@ -404,7 +482,7 @@ local function createUI()
     listLayout.Padding = UDim.new(0, 2)
     listLayout.Parent = remoteListFrame
 
-    -- Param 1 input
+    -- Parameter inputs (only shown in remotes mode)
     local param1Input = Instance.new("TextBox")
     param1Input.Size = UDim2.new(0.22, 0, 0, 25)
     param1Input.Position = UDim2.new(0.025, 0, 0, 350)
@@ -413,9 +491,9 @@ local function createUI()
     param1Input.TextColor3 = Color3.fromRGB(255, 255, 255)
     param1Input.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
     param1Input.BorderSizePixel = 0
+    param1Input.Visible = (currentMode == "remotes")
     param1Input.Parent = frame
 
-    -- Param 2 input
     local param2Input = Instance.new("TextBox")
     param2Input.Size = UDim2.new(0.22, 0, 0, 25)
     param2Input.Position = UDim2.new(0.275, 0, 0, 350)
@@ -424,9 +502,9 @@ local function createUI()
     param2Input.TextColor3 = Color3.fromRGB(255, 255, 255)
     param2Input.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
     param2Input.BorderSizePixel = 0
+    param2Input.Visible = (currentMode == "remotes")
     param2Input.Parent = frame
 
-    -- Param 3 input
     local param3Input = Instance.new("TextBox")
     param3Input.Size = UDim2.new(0.22, 0, 0, 25)
     param3Input.Position = UDim2.new(0.525, 0, 0, 350)
@@ -435,9 +513,9 @@ local function createUI()
     param3Input.TextColor3 = Color3.fromRGB(255, 255, 255)
     param3Input.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
     param3Input.BorderSizePixel = 0
+    param3Input.Visible = (currentMode == "remotes")
     param3Input.Parent = frame
 
-    -- Param 4 input
     local param4Input = Instance.new("TextBox")
     param4Input.Size = UDim2.new(0.22, 0, 0, 25)
     param4Input.Position = UDim2.new(0.775, 0, 0, 350)
@@ -446,6 +524,7 @@ local function createUI()
     param4Input.TextColor3 = Color3.fromRGB(255, 255, 255)
     param4Input.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
     param4Input.BorderSizePixel = 0
+    param4Input.Visible = (currentMode == "remotes")
     param4Input.Parent = frame
 
 
@@ -570,9 +649,19 @@ local function createUI()
             for i, remoteData in ipairs(allRemotes) do
                 local btn = Instance.new("TextButton")
                 btn.Size = UDim2.new(1, 0, 0, 25)
-                btn.BackgroundColor3 = remoteData.isInventory and Color3.fromRGB(100, 150, 100) or Color3.fromRGB(60, 60, 60)
+                -- Color coding: Green for inventory, Yellow for island, Gray for others
+                if remoteData.isIsland then
+                    btn.BackgroundColor3 = Color3.fromRGB(150, 150, 100)
+                elseif remoteData.isInventory then
+                    btn.BackgroundColor3 = Color3.fromRGB(100, 150, 100)
+                else
+                    btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+                end
                 btn.BorderSizePixel = 0
-                btn.Text = remoteData.name .. (remoteData.isEvent and " (Event)" or " (Function)") .. (remoteData.isInventory and " [INVENTORY]" or "")
+                local tags = {}
+                if remoteData.isInventory then table.insert(tags, "[INVENTORY]") end
+                if remoteData.isIsland then table.insert(tags, "[ISLAND]") end
+                btn.Text = remoteData.name .. (remoteData.isEvent and " (Event)" or " (Function)") .. (#tags > 0 and " " .. table.concat(tags, " ") or "")
                 btn.TextColor3 = Color3.fromRGB(255, 255, 255)
                 btn.Font = Enum.Font.SourceSans
                 btn.TextScaled = true
