@@ -15,6 +15,8 @@ local player = Players.LocalPlayer
 local enabled = true
 local gui = nil
 local frame = nil
+local currentMode = "remotes"  -- "remotes" or "items"
+local amountInput = nil
 
 -- Hardcoded remote access (improved with fallback search)
 local allRemotes = {}
@@ -115,8 +117,55 @@ local function fireBothRemotes()
     fireRequest()
 end
 
+-- Scan and load all obtainable items (from buddy's script)
+local allItems = {}
+local function scanItems()
+    allItems = {}
+    local areas = {ReplicatedStorage, workspace}
+    for _, area in ipairs(areas) do
+        for _, child in ipairs(area:GetDescendants()) do
+            if child:IsA("Tool") or (child:IsA("Model") and child:FindFirstChild("Handle")) then
+                local itemName = child.Name
+                if not table.find(allItems, itemName) then  -- Avoid duplicates
+                    local icon = ""
+                    if child:IsA("Tool") and child:FindFirstChild("TextureId") then
+                        icon = child.TextureId
+                    elseif child:FindFirstChild("Handle") and child.Handle:FindFirstChildOfClass("Decal") then
+                        icon = child.Handle.Decal.Texture
+                    end
+                    if icon == "" then icon = "rbxassetid://0" end
+                    table.insert(allItems, {name = itemName, obj = child, icon = icon})
+                end
+            end
+        end
+    end
+    table.sort(allItems, function(a, b) return a.name < b.name end)
+    print("Scanned " .. #allItems .. " items")
+    return #allItems > 0
+end
 
--- Removed search and favorites for simplicity
+-- Function to dupe selected item (from buddy's script)
+local function dupeItem(itemData, amount)
+    local backpack = player:WaitForChild("Backpack")
+    local successCount = 0
+    for i = 1, amount do
+        local clone = itemData.obj:Clone()
+        clone.Parent = backpack
+        successCount = successCount + 1
+        wait(0.1)  -- Small delay
+    end
+    print("Cloned " .. itemData.name .. " x" .. amount .. " to backpack")
+
+    -- Fire original remotes for server-side dupe/persistence
+    fireBothRemotes()
+    wait(0.5)
+    local saved = saveData()
+    if saved then
+        print("Data saved for persistence")
+    end
+
+    return successCount
+end
 
 
 -- Fixed dupe (original method, no args)
@@ -143,13 +192,14 @@ local consoleOutput = nil
 local remoteListFrame = nil
 local selectedRemote = nil
 local selectedName = ""
+local selectedItem = nil
 local function createUI()
     gui = Instance.new("ScreenGui")
     gui.Name = "UniversalIslandsDupe"
     gui.Parent = player:WaitForChild("PlayerGui")
     
     frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 500, 0, 520)
+    frame.Size = UDim2.new(0, 500, 0, 530)
     frame.Position = UDim2.new(0, 10, 0, 10)
     frame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
     frame.BackgroundTransparency = 0.2
@@ -168,10 +218,87 @@ local function createUI()
     title.Font = Enum.Font.SourceSansBold
     title.Parent = frame
 
-    -- Remote list (simple alphabetical text list)
+    -- Mode toggle button
+    local modeBtn = Instance.new("TextButton")
+    modeBtn.Size = UDim2.new(0.3, 0, 0, 25)
+    modeBtn.Position = UDim2.new(0.025, 0, 0, 30)
+    modeBtn.Text = "Mode: Remotes"
+    modeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    modeBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    modeBtn.BorderSizePixel = 0
+    modeBtn.Font = Enum.Font.SourceSansBold
+    modeBtn.TextScaled = true
+    modeBtn.Parent = frame
+    modeBtn.MouseButton1Click:Connect(function()
+        currentMode = currentMode == "remotes" and "items" or "remotes"
+        modeBtn.Text = "Mode: " .. (currentMode == "remotes" and "Remotes" or "Items")
+        if currentMode == "items" and #allItems == 0 then
+            scanItems()
+        end
+        populateList()
+        if consoleOutput then
+            consoleOutput.Text = "Switched to " .. currentMode .. " mode"
+        end
+    end)
+
+    -- Amount input for items
+    amountInput = Instance.new("TextBox")
+    amountInput.Size = UDim2.new(0.3, 0, 0, 25)
+    amountInput.Position = UDim2.new(0.35, 0, 0, 30)
+    amountInput.Text = "1"
+    amountInput.PlaceholderText = "Amount"
+    amountInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+    amountInput.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    amountInput.BorderSizePixel = 0
+    amountInput.Parent = frame
+
+    -- Rescan button
+    local rescanBtn = Instance.new("TextButton")
+    rescanBtn.Size = UDim2.new(0.3, 0, 0, 25)
+    rescanBtn.Position = UDim2.new(0.675, 0, 0, 30)
+    rescanBtn.Text = "Rescan"
+    rescanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    rescanBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    rescanBtn.BorderSizePixel = 0
+    rescanBtn.Font = Enum.Font.SourceSansBold
+    rescanBtn.TextScaled = true
+    rescanBtn.Parent = frame
+    rescanBtn.MouseButton1Click:Connect(function()
+        if currentMode == "remotes" then
+            allRemotes = {}
+            if netManaged then
+                for _, child in ipairs(netManaged:GetDescendants()) do
+                    if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+                        local isInventory = false
+                        for _, name in ipairs(inventoryNames) do
+                            if string.find(child.Name:lower(), name:lower()) then
+                                isInventory = true
+                                break
+                            end
+                        end
+                        table.insert(allRemotes, {
+                            name = child.Name,
+                            obj = child,
+                            isEvent = child:IsA("RemoteEvent"),
+                            isInventory = isInventory
+                        })
+                    end
+                end
+            end
+            table.sort(allRemotes, function(a, b) return a.name < b.name end)
+        else
+            scanItems()
+        end
+        populateList()
+        if consoleOutput then
+            consoleOutput.Text = "Rescanned " .. (currentMode == "remotes" and #allRemotes or #allItems) .. " " .. currentMode
+        end
+    end)
+
+    -- List frame (dynamic for remotes or items)
     remoteListFrame = Instance.new("ScrollingFrame")
-    remoteListFrame.Size = UDim2.new(0.95, 0, 0, 300)
-    remoteListFrame.Position = UDim2.new(0.025, 0, 0, 30)
+    remoteListFrame.Size = UDim2.new(0.95, 0, 0, 280)
+    remoteListFrame.Position = UDim2.new(0.025, 0, 0, 60)
     remoteListFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
     remoteListFrame.BorderSizePixel = 0
     remoteListFrame.ScrollBarThickness = 8
@@ -185,7 +312,7 @@ local function createUI()
     -- Param 1 input
     local param1Input = Instance.new("TextBox")
     param1Input.Size = UDim2.new(0.22, 0, 0, 25)
-    param1Input.Position = UDim2.new(0.025, 0, 0, 340)
+    param1Input.Position = UDim2.new(0.025, 0, 0, 350)
     param1Input.Text = ""
     param1Input.PlaceholderText = "Param 1"
     param1Input.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -196,7 +323,7 @@ local function createUI()
     -- Param 2 input
     local param2Input = Instance.new("TextBox")
     param2Input.Size = UDim2.new(0.22, 0, 0, 25)
-    param2Input.Position = UDim2.new(0.275, 0, 0, 340)
+    param2Input.Position = UDim2.new(0.275, 0, 0, 350)
     param2Input.Text = ""
     param2Input.PlaceholderText = "Param 2"
     param2Input.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -207,7 +334,7 @@ local function createUI()
     -- Param 3 input
     local param3Input = Instance.new("TextBox")
     param3Input.Size = UDim2.new(0.22, 0, 0, 25)
-    param3Input.Position = UDim2.new(0.525, 0, 0, 340)
+    param3Input.Position = UDim2.new(0.525, 0, 0, 350)
     param3Input.Text = ""
     param3Input.PlaceholderText = "Param 3"
     param3Input.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -218,7 +345,7 @@ local function createUI()
     -- Param 4 input
     local param4Input = Instance.new("TextBox")
     param4Input.Size = UDim2.new(0.22, 0, 0, 25)
-    param4Input.Position = UDim2.new(0.775, 0, 0, 340)
+    param4Input.Position = UDim2.new(0.775, 0, 0, 350)
     param4Input.Text = ""
     param4Input.PlaceholderText = "Param 4"
     param4Input.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -226,50 +353,12 @@ local function createUI()
     param4Input.BorderSizePixel = 0
     param4Input.Parent = frame
 
-    -- Rescan button
-    local scanBtn = Instance.new("TextButton")
-    scanBtn.Size = UDim2.new(0.45, 0, 0, 25)
-    scanBtn.Position = UDim2.new(0.025, 0, 0, 370)
-    scanBtn.Text = "Rescan Remotes"
-    scanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    scanBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-    scanBtn.BorderSizePixel = 0
-    scanBtn.Font = Enum.Font.SourceSansBold
-    scanBtn.TextScaled = true
-    scanBtn.Parent = frame
-    scanBtn.MouseButton1Click:Connect(function()
-        allRemotes = {}
-        if netManaged then
-            for _, child in ipairs(netManaged:GetDescendants()) do
-                if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
-                    local isInventory = false
-                    for _, name in ipairs(inventoryNames) do
-                        if string.find(child.Name:lower(), name:lower()) then
-                            isInventory = true
-                            break
-                        end
-                    end
-                    table.insert(allRemotes, {
-                        name = child.Name,
-                        obj = child,
-                        isEvent = child:IsA("RemoteEvent"),
-                        isInventory = isInventory
-                    })
-                end
-            end
-        end
-        table.sort(allRemotes, function(a, b) return a.name < b.name end)
-        populateRemoteList()
-        if consoleOutput then
-            consoleOutput.Text = "Rescanned " .. #allRemotes .. " remotes"
-        end
-    end)
 
     -- Fire button
     local fireBtn = Instance.new("TextButton")
     fireBtn.Size = UDim2.new(0.45, 0, 0, 25)
-    fireBtn.Position = UDim2.new(0.5, 0, 0, 370)
-    fireBtn.Text = "Fire Selected Remote"
+    fireBtn.Position = UDim2.new(0.5, 0, 0, 380)
+    fireBtn.Text = "Fire Selected"
     fireBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     fireBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
     fireBtn.BorderSizePixel = 0
@@ -277,42 +366,54 @@ local function createUI()
     fireBtn.TextScaled = true
     fireBtn.Parent = frame
     fireBtn.MouseButton1Click:Connect(function()
-        if not selectedRemote then
-            if consoleOutput then consoleOutput.Text = "No remote selected" end
-            return
-        end
-        local params = {}
-        local paramInputs = {param1Input, param2Input, param3Input, param4Input}
-        for _, input in ipairs(paramInputs) do
-            local text = input.Text
-            if text ~= "" then
-                local num = tonumber(text)
-                if num then
-                    table.insert(params, num)
+        if currentMode == "remotes" then
+            if not selectedRemote then
+                if consoleOutput then consoleOutput.Text = "No remote selected" end
+                return
+            end
+            local params = {}
+            local paramInputs = {param1Input, param2Input, param3Input, param4Input}
+            for _, input in ipairs(paramInputs) do
+                local text = input.Text
+                if text ~= "" then
+                    local num = tonumber(text)
+                    if num then
+                        table.insert(params, num)
+                    else
+                        table.insert(params, text)
+                    end
+                end
+            end
+            pcall(function()
+                if selectedRemote:IsA("RemoteEvent") then
+                    selectedRemote:FireServer(unpack(params))
                 else
-                    table.insert(params, text)
+                    local result = selectedRemote:InvokeServer(unpack(params))
+                    if consoleOutput then
+                        consoleOutput.Text = "Invoked " .. selectedName .. ", result: " .. tostring(result)
+                    end
                 end
+                if consoleOutput then
+                    consoleOutput.Text = "Fired " .. selectedName .. " with " .. #params .. " params"
+                end
+            end)
+        else
+            if not selectedItem then
+                if consoleOutput then consoleOutput.Text = "No item selected" end
+                return
+            end
+            local amt = tonumber(amountInput.Text) or 1
+            local count = dupeItem(selectedItem, amt)
+            if consoleOutput then
+                consoleOutput.Text = "Duped " .. selectedItem.name .. " x" .. count
             end
         end
-        pcall(function()
-            if selectedRemote:IsA("RemoteEvent") then
-                selectedRemote:FireServer(unpack(params))
-            else
-                local result = selectedRemote:InvokeServer(unpack(params))
-                if consoleOutput then
-                    consoleOutput.Text = "Invoked " .. selectedName .. ", result: " .. tostring(result)
-                end
-            end
-            if consoleOutput then
-                consoleOutput.Text = "Fired " .. selectedName .. " with " .. #params .. " params"
-            end
-        end)
     end)
 
     -- Quick Add button
     local quickBtn = Instance.new("TextButton")
     quickBtn.Size = UDim2.new(0.45, 0, 0, 25)
-    quickBtn.Position = UDim2.new(0.025, 0, 0, 400)
+    quickBtn.Position = UDim2.new(0.025, 0, 0, 410)
     quickBtn.Text = "Quick Add Item (ID:1, Amount:100)"
     quickBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     quickBtn.BackgroundColor3 = Color3.fromRGB(150, 100, 200)
@@ -321,29 +422,40 @@ local function createUI()
     quickBtn.TextScaled = true
     quickBtn.Parent = frame
     quickBtn.MouseButton1Click:Connect(function()
-        if not selectedRemote then
-            if consoleOutput then consoleOutput.Text = "No remote selected" end
-            return
-        end
-        pcall(function()
-            if selectedRemote:IsA("RemoteEvent") then
-                selectedRemote:FireServer(1, 100)
-            else
-                local result = selectedRemote:InvokeServer(1, 100)
-                if consoleOutput then
-                    consoleOutput.Text = "Invoked " .. selectedName .. ", result: " .. tostring(result)
+        if currentMode == "remotes" then
+            if not selectedRemote then
+                if consoleOutput then consoleOutput.Text = "No remote selected" end
+                return
+            end
+            pcall(function()
+                if selectedRemote:IsA("RemoteEvent") then
+                    selectedRemote:FireServer(1, 100)
+                else
+                    local result = selectedRemote:InvokeServer(1, 100)
+                    if consoleOutput then
+                        consoleOutput.Text = "Invoked " .. selectedName .. ", result: " .. tostring(result)
+                    end
                 end
+                if consoleOutput then
+                    consoleOutput.Text = "Quick added item ID:1, amount:100"
+                end
+            end)
+        else
+            if not selectedItem then
+                if consoleOutput then consoleOutput.Text = "No item selected" end
+                return
             end
+            local count = dupeItem(selectedItem, 100)
             if consoleOutput then
-                consoleOutput.Text = "Quick added item ID:1, amount:100"
+                consoleOutput.Text = "Quick duped " .. selectedItem.name .. " x100"
             end
-        end)
+        end
     end)
 
     -- Fixed dupe
     local fixedBtn = Instance.new("TextButton")
     fixedBtn.Size = UDim2.new(0.95, 0, 0, 25)
-    fixedBtn.Position = UDim2.new(0.025, 0, 0, 430)
+    fixedBtn.Position = UDim2.new(0.025, 0, 0, 440)
     fixedBtn.Text = "Fixed Dupe (3 Items)"
     fixedBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     fixedBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
@@ -354,67 +466,103 @@ local function createUI()
     fixedBtn.MouseButton1Click:Connect(fixedDupe)
 
     -- Function to populate list
-    function populateRemoteList()
+    function populateList()
         for _, child in ipairs(remoteListFrame:GetChildren()) do
             if child:IsA("TextButton") then child:Destroy() end
         end
 
-        for i, remoteData in ipairs(allRemotes) do
-            local btn = Instance.new("TextButton")
-            btn.Size = UDim2.new(1, 0, 0, 25)
-            btn.BackgroundColor3 = remoteData.isInventory and Color3.fromRGB(100, 150, 100) or Color3.fromRGB(60, 60, 60)
-            btn.BorderSizePixel = 0
-            btn.Text = remoteData.name .. (remoteData.isEvent and " (Event)" or " (Function)") .. (remoteData.isInventory and " [INVENTORY]" or "")
-            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-            btn.Font = Enum.Font.SourceSans
-            btn.TextScaled = true
-            btn.LayoutOrder = i
-            btn.Parent = remoteListFrame
+        if currentMode == "remotes" then
+            for i, remoteData in ipairs(allRemotes) do
+                local btn = Instance.new("TextButton")
+                btn.Size = UDim2.new(1, 0, 0, 25)
+                btn.BackgroundColor3 = remoteData.isInventory and Color3.fromRGB(100, 150, 100) or Color3.fromRGB(60, 60, 60)
+                btn.BorderSizePixel = 0
+                btn.Text = remoteData.name .. (remoteData.isEvent and " (Event)" or " (Function)") .. (remoteData.isInventory and " [INVENTORY]" or "")
+                btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                btn.Font = Enum.Font.SourceSans
+                btn.TextScaled = true
+                btn.LayoutOrder = i
+                btn.Parent = remoteListFrame
 
-            btn.MouseButton1Click:Connect(function()
-                selectedRemote = remoteData.obj
-                selectedName = remoteData.name
-                if consoleOutput then
-                    consoleOutput.Text = "Selected: " .. selectedName
-                end
-                -- Pre-fill params if inventory
-                if remoteData.isInventory then
-                    param1Input.Text = "1"  -- itemId
-                    param2Input.Text = "100"  -- amount
-                    param3Input.Text = ""
-                    param4Input.Text = ""
+                btn.MouseButton1Click:Connect(function()
+                    selectedRemote = remoteData.obj
+                    selectedName = remoteData.name
+                    selectedItem = nil
                     if consoleOutput then
-                        consoleOutput.Text = consoleOutput.Text .. "\n[INFO] Pre-filled params: itemId=1, amount=100"
+                        consoleOutput.Text = "Selected: " .. selectedName
                     end
-                end
-            end)
-        end
+                    -- Pre-fill params if inventory
+                    if remoteData.isInventory then
+                        param1Input.Text = "1"  -- itemId
+                        param2Input.Text = "100"  -- amount
+                        param3Input.Text = ""
+                        param4Input.Text = ""
+                        if consoleOutput then
+                            consoleOutput.Text = consoleOutput.Text .. "\n[INFO] Pre-filled params: itemId=1, amount=100"
+                        end
+                    end
+                end)
+            end
 
-        if #allRemotes == 0 then
-            local noRemotes = Instance.new("TextLabel")
-            noRemotes.Size = UDim2.new(1, 0, 0, 25)
-            noRemotes.BackgroundTransparency = 1
-            noRemotes.Text = "No remotes found."
-            noRemotes.TextColor3 = Color3.fromRGB(200, 200, 200)
-            noRemotes.Font = Enum.Font.SourceSans
-            noRemotes.TextScaled = true
-            noRemotes.Parent = remoteListFrame
+            if #allRemotes == 0 then
+                local noRemotes = Instance.new("TextLabel")
+                noRemotes.Size = UDim2.new(1, 0, 0, 25)
+                noRemotes.BackgroundTransparency = 1
+                noRemotes.Text = "No remotes found."
+                noRemotes.TextColor3 = Color3.fromRGB(200, 200, 200)
+                noRemotes.Font = Enum.Font.SourceSans
+                noRemotes.TextScaled = true
+                noRemotes.Parent = remoteListFrame
+            end
+        else
+            for i, itemData in ipairs(allItems) do
+                local btn = Instance.new("TextButton")
+                btn.Size = UDim2.new(1, 0, 0, 25)
+                btn.BackgroundColor3 = Color3.fromRGB(60, 100, 150)
+                btn.BorderSizePixel = 0
+                btn.Text = itemData.name .. " (Click to dupe)"
+                btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                btn.Font = Enum.Font.SourceSans
+                btn.TextScaled = true
+                btn.LayoutOrder = i
+                btn.Parent = remoteListFrame
+
+                btn.MouseButton1Click:Connect(function()
+                    selectedItem = itemData
+                    selectedRemote = nil
+                    selectedName = itemData.name
+                    if consoleOutput then
+                        consoleOutput.Text = "Selected: " .. selectedName
+                    end
+                end)
+            end
+
+            if #allItems == 0 then
+                local noItems = Instance.new("TextLabel")
+                noItems.Size = UDim2.new(1, 0, 0, 25)
+                noItems.BackgroundTransparency = 1
+                noItems.Text = "No items found. Try rescanning."
+                noItems.TextColor3 = Color3.fromRGB(200, 200, 200)
+                noItems.Font = Enum.Font.SourceSans
+                noItems.TextScaled = true
+                noItems.Parent = remoteListFrame
+            end
         end
 
         remoteListFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y)
     end
 
     -- Initial scan and populate
-    populateRemoteList()
+    populateList()
 
     -- Console
     consoleOutput = Instance.new("TextLabel")
     consoleOutput.Size = UDim2.new(0.95, 0, 0, 45)
-    consoleOutput.Position = UDim2.new(0.025, 0, 0, 460)
+    consoleOutput.Position = UDim2.new(0.025, 0, 0, 470)
     consoleOutput.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
     consoleOutput.BorderSizePixel = 1
     consoleOutput.BorderColor3 = Color3.fromRGB(0, 255, 0)
-    consoleOutput.Text = "[CONSOLE] Select remote, use Quick Add for auto params or Fire for custom."
+    consoleOutput.Text = "[CONSOLE] Select item/remote, use Quick Add for auto params or Fire for custom."
     consoleOutput.TextColor3 = Color3.fromRGB(0, 255, 0)
     consoleOutput.TextSize = 11
     consoleOutput.TextWrapped = true
